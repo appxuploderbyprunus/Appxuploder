@@ -42,6 +42,239 @@ from text_handler import text_to_txt
 from youtube_handler import ytm_handler, y2t_handler, getcookies_handler, cookies_handler
 from utils import progress_bar
 from vars import API_ID, API_HASH, BOT_TOKEN, OWNER, CREDIT, AUTH_USERS, TOTAL_USERS, cookies_file_path
+from vars import api_url 
+from globals import cwtoken, cptoken, pwtoken 
+
+# ----- New Decryption Logic Function (Timeout increased to 60) -----
+def get_keys_from_api(url, user_id):
+    """Fetches MPD URL and Decryption Keys from the specified API."""
+    try:
+        api_request_url = api_url.format(url=urllib.parse.quote(url, safe=''), user_id=user_id)
+        
+        logging.info(f"API Request URL: {api_request_url}")
+        
+        headers = {}
+        if cwtoken:
+            headers['Authorization'] = f'Bearer {cwtoken}'
+            
+        # *** FIX: Increased timeout from 30 to 60 seconds ***
+        response = requests.get(api_request_url, headers=headers, timeout=60) 
+        response.raise_for_status() 
+        
+        data = response.json()
+        
+        if 'error' in data:
+            raise Exception(f"API Error: {data['error']}")
+            
+        mpd_url = data.get('MPD', data.get('mpd_url'))
+        keys = data.get('KEYS', data.get('keys'))
+        
+        if not mpd_url or not keys:
+            raise Exception("API did not return valid MPD URL or Decryption Keys.")
+            
+        return mpd_url, keys
+        
+    except requests.exceptions.RequestException as e:
+        logging.error(f"API Request Failed: {e}")
+        raise Exception(f"Failed to reach Decryption API: {e}. (Tried with 60s timeout)")
+    except json.JSONDecodeError:
+        logging.error(f"API returned invalid JSON: {response.text}")
+        raise Exception("Decryption API returned invalid response.")
+    except Exception as e:
+        logging.error(f"Decryption API Error: {e}")
+        raise e
+
+# ----- Main Handler Function (Now accepts an optional start index) -----
+async def drm_handler(bot: Client, m: Message):
+    if not globals.processing_request:
+        globals.processing_request = True
+    else:
+        await m.reply_text("⛔️ **An existing task is running.** Please use `/stop` to cancel it or wait for it to finish.", quote=True)
+        return
+
+    try:
+        user_id = m.from_user.id
+        
+        # --- FIX: Define b_name before it is used ---
+        b_name = f"Batch-{user_id}" 
+        channel_id = m.chat.id
+        start_index = 1 # Default starting index is 1
+
+        # --- NEW LOGIC: Extract starting index from command text ---
+        raw_text = m.text if m.text else m.caption
+        command_parts = raw_text.split()
+        
+        if len(command_parts) > 1 and command_parts[1].isdigit():
+            start_index = int(command_parts[1])
+            if start_index < 1:
+                start_index = 1
+            await m.reply_text(f"Starting download from link **#{start_index}**...", quote=True)
+        # --------------------------------------------------------
+
+        links = []
+        file_path = None
+        
+        # Logic to handle .txt file upload
+        if m.reply_to_message and m.reply_to_message.document and m.reply_to_message.document.file_name.endswith('.txt'):
+            file_path = await m.reply_to_message.download()
+            with open(file_path, "r") as f:
+                links = f.read().splitlines()
+            
+            # Use file name as batch name
+            b_name = os.path.splitext(m.reply_to_message.document.file_name)[0]
+            
+        else:
+             # Logic for direct text input or reply to single link (excluding the command line itself)
+            raw_lines = raw_text.splitlines() if raw_text else []
+            links = raw_lines[1:] if raw_lines and raw_lines[0].startswith('/') else raw_lines
+
+
+        if not links:
+            await m.reply_text("❌ **No links found.** Please provide a valid list of links or reply to a `.txt` file.", quote=True)
+            globals.processing_request = False
+            return
+            
+        # --- NEW LOGIC: Filter links and adjust counter ---
+        links_to_process = links[start_index - 1:]
+        
+        if not links_to_process:
+             await m.reply_text(f"❌ **Error:** Starting index ({start_index}) is greater than the total number of links ({len(links)}).", quote=True)
+             globals.processing_request = False
+             return
+             
+        # Set the processing counter to the starting index
+        count = start_index 
+        # ----------------------------------------------------
+
+        # Ensure the download directory exists
+        if not os.path.isdir(f"downloads/{b_name}"):
+            os.makedirs(f"downloads/{b_name}")
+        
+        # Initialization for counts (track success/failure from the starting index)
+        failed_count = 0
+        v2_count = 0
+        mpd_count = 0
+        m3u8_count = 0
+        yt_count = 0
+        drm_count = 0
+        zip_count = 0
+        other_count = 0
+        pdf_count = 0
+        img_count = 0
+        
+        
+        # Start processing links
+        for url in links_to_process: # Iterate over the filtered list
+            if globals.cancel_requested:
+                await m.reply_text("🚫 **Task Cancelled** by user.", quote=True)
+                break
+                
+            url = url.strip()
+            if not url:
+                count += 1
+                continue
+
+            # Check if the link is a DRM link (Appx/Classplus pattern)
+            is_drm_link = "appx" in url.lower() or "classplus" in url.lower() or any(ext in url for ext in ["mpd", "p-cdn.net"])
+
+            if is_drm_link:
+                name1 = f"Decrypted_Video_{str(count).zfill(3)}" 
+                
+                try:
+                    mpd_url, keys = get_keys_from_api(url, user_id)
+                    
+                    key_list = [f"{k['kid']}:{k['key']}" for k in keys]
+                    decryption_keys = ','.join(key_list)
+                    
+                    ydl_opts = {
+                        'format': 'best',
+                        'external_downloader': 'aria2c',
+                        'external_downloader_args': ['-x', '16', '-s', '16', '-k', '1M'],
+                        'allow_unplayable_formats': True,
+                        'skip_download': False,
+                        'restrictfilenames': True,
+                        'no_check_certificate': True,
+                        'ignoreerrors': True,
+                        'logtostderr': False,
+                        'quiet': True,
+                        'no_warnings': True,
+                        'add_metadata': True,
+                        'http_headers': {
+                            'Authorization': f'Bearer {cwtoken}' 
+                        },
+                        'allow_multiple_keys': True,
+                        'decryption_keys': decryption_keys, 
+                        'outtmpl': f"downloads/{b_name}/{name1}.%(ext)s" 
+                    }
+
+                    await m.reply_text(f"Decrypting and downloading DRM link {count}/{len(links)}: {name1}", quote=True)
+                    
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        ydl.download([mpd_url])
+                        
+                    downloaded_file = next((os.path.join(f"downloads/{b_name}", f) for f in os.listdir(f"downloads/{b_name}") if f.startswith(name1)), None)
+                    
+                    if downloaded_file:
+                        await helper.send_video(bot, m, downloaded_file, name1, user_id) 
+                        os.remove(downloaded_file) 
+                    else:
+                        raise Exception("Downloaded file not found after yt-dlp execution.")
+                        
+                    drm_count += 1
+                    
+                except Exception as e:
+                    logging.error(f"DRM Link Decryption/Download Failed for {name1}: {str(e)}")
+                    await m.reply_text(f'<b>-┈━═.•°💔 Failed 💔°•.═━┈-</b>\n**Name** =>> `{str(count).zfill(3)} {name1}`\n**Url** =>> {url}\n\n<blockquote expandable><i><b>Failed Reason: {str(e)}</b></i></blockquote>', disable_web_page_preview=True)
+                    failed_count += 1
+                
+            # --- Place your non-DRM link handling logic here ---
+            # You need to implement logic for PDF/other files here if they are not DRM-protected
+            # Example:
+            # elif "appx-pdf" in url.lower():
+            #     # Handle PDF download logic here
+            #     pdf_count += 1
+            # elif url.endswith(('.mp4', '.mkv')):
+            #     # Handle direct video download logic here
+            #     other_count += 1
+            
+            count += 1 # Increment the counter for the next link
+            
+        # Final summary message
+        total_processed_links = len(links)
+        total_links_processed_in_this_run = len(links_to_process)
+        success_count = total_links_processed_in_this_run - failed_count
+        video_count = v2_count + mpd_count + m3u8_count + yt_count + drm_count + zip_count + other_count
+        
+        final_caption = (
+            "<b>-┈━═.•°✅ Completed ✅°•.═━┈-</b>\n"
+            f"<blockquote><b>🎯Batch Name : {b_name}</b></blockquote>\n"
+            f"<blockquote>🔗 Total Links in List: {total_processed_links} \n"
+            f"┃   ┠🚀 Started From Link: **#{start_index}**\n"
+            f"┃   ┠🔴 Total Failed URLs: {failed_count}\n"
+            f"┃   ┠🟢 Total Successful URLs: {success_count}\n"
+            f"┃   ┃   ┠🎥 Total Video URLs: {video_count}\n"
+            f"┃   ┃   ┠📄 Total PDF URLs: {pdf_count}\n"
+            f"┃   ┃   ┠📸 Total IMAGE URLs: {img_count}</blockquote>\n"
+        )
+        
+        await bot.send_message(channel_id, final_caption)
+
+    except Exception as e:
+        await m.reply_text(f"An unexpected error occurred: {str(e)}", quote=True)
+    finally:
+        globals.processing_request = False
+        globals.cancel_requested = False
+        shutil.rmtree(f"downloads/{b_name}", ignore_errors=True)
+        if file_path and os.path.exists(file_path):
+            os.remove(file_path)
+import html_handler
+import globals
+from authorisation import add_auth_user, list_auth_users, remove_auth_user
+from broadcast import broadcast_handler, broadusers_handler
+from text_handler import text_to_txt
+from youtube_handler import ytm_handler, y2t_handler, getcookies_handler, cookies_handler
+from utils import progress_bar
+from vars import API_ID, API_HASH, BOT_TOKEN, OWNER, CREDIT, AUTH_USERS, TOTAL_USERS, cookies_file_path
 from vars import api_url # This now has your Koyeb link!
 from globals import cwtoken, cptoken, pwtoken # NEW: Ensures tokens are available for decryption
 
