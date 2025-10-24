@@ -3,12 +3,12 @@
 import os
 from os import environ
 
-API_ID = int(environ.get("API_ID", "22182189"))
-API_HASH = environ.get("API_HASH", "5e7c4088f8e23d0ab61e29ae11960bf5")
-BOT_TOKEN = environ.get("BOT_TOKEN", "")
+API_ID = int(environ.get("API_ID", "3140089"))
+API_HASH = environ.get("API_HASH", "ef67c500cfbd85b764535cf1c8c9917f")
+BOT_TOKEN = environ.get("BOT_TOKEN", "8366648712:AAGY4C_ISEyRVjQEwPL3hV7hlTsTwDxKXeE")
 
-OWNER = int(environ.get("OWNER", "5680454765"))
-CREDIT = environ.get("CREDIT", "𝙎𝘼𝙄𝙉𝙄 𝘽𝙊𝙏𝙎")
+OWNER = int(environ.get("OWNER", "7361052650"))
+CREDIT = environ.get("CREDIT", "Prunus💋")
 cookies_file_path = os.getenv("cookies_file_path", "youtube_cookies.txt")
 
 TOTAL_USER = os.environ.get('TOTAL_USERS', '5680454765').split(',')
@@ -26,3 +26,4 @@ api_url = "https://head-micheline-botupdatevip-f1804c58.koyeb.app/get_keys?url={
 cwtoken = environ.get("CW_TOKEN", "")
 cptoken = environ.get("CP_TOKEN", "")
 pwtoken = environ.get("PW_TOKEN", "")
+
