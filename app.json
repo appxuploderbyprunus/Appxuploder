@@ -1,0 +1,15 @@
+        "CW_TOKEN": {
+            "description": "Optional: Classplus/Brightcove Decryption Token (CW/BCOV). Required for most DRM downloads.",
+            "value": "",
+            "required": false
+        },
+        "CP_TOKEN": {
+            "description": "Optional: Secondary Classplus Decryption Token (CP).",
+            "value": "",
+            "required": false
+        },
+        "PW_TOKEN": {
+            "description": "Optional: PhysicsWallah/Playback Widevine Token (PW).",
+            "value": "",
+            "required": false
+        },
